@@ -158,6 +158,16 @@ CREATE TABLE hardware_dependencies (
     CONSTRAINT unique_hardware_dependency UNIQUE (file_path, line_number, hardware_type)
 );
 
+CREATE TABLE comments (
+    id SERIAL PRIMARY KEY,
+    finding_type TEXT NOT NULL,
+    finding_id INT NOT NULL,
+    comment TEXT NOT NULL,
+    created_by TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    ection_name VARCHAR(255)
+);
+
 -- Indexes for faster lookups
 CREATE UNIQUE INDEX IF NOT EXISTS idx_screens_unique ON screens (name, file_path);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_api_calls_unique ON api_calls (endpoint, method);

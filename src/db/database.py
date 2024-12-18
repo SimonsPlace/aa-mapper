@@ -28,6 +28,35 @@ class Database:
             logging.error(f"Error connecting to database: {e}")
             raise e
 
+    def insert_comment(self, finding_type, finding_id, comment, created_by=None):
+        try:
+            self.cursor.execute(
+                """
+                INSERT INTO comments (finding_type, finding_id, comment, created_by, created_at)
+                VALUES (%s, %s, %s, %s, NOW())
+                """,
+                (finding_type, finding_id, comment, created_by)
+            )
+            self.connection.commit()
+        except Exception as e:
+            logging.error(f"Error inserting comment: {e}")
+
+    def fetch_comments(self, finding_type, finding_id):
+        try:
+            self.cursor.execute(
+                """
+                SELECT comment, created_by, created_at
+                FROM comments
+                WHERE finding_type = %s AND finding_id = %s
+                ORDER BY created_at DESC
+                """,
+                (finding_type, finding_id)
+            )
+            return self.cursor.fetchall()
+        except Exception as e:
+            logging.error(f"Error fetching comments: {e}")
+            return []
+ 
     def insert_screens(self, screens):
         for screen in screens:
             try:

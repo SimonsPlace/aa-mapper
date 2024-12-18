@@ -3,6 +3,7 @@ import os
 import logging
 import streamlit as st
 import pandas as pd
+import time
 from pyvis.network import Network
 from streamlit.components.v1 import html
 from src.db.database import get_db_connection
@@ -14,421 +15,596 @@ logging.basicConfig(level=logging.INFO)
 USERNAME = os.getenv("DASHBOARD_USERNAME")
 PASSWORD = os.getenv("DASHBOARD_PASSWORD")
 
-# Helper functions
-def authenticate_user():
-    """Authenticate user with a dedicated login screen"""
-    st.title("🔒 Login")
-    st.write("Please enter your credentials to access the dashboard.")
-    username = st.text_input("Username")
-    password = st.text_input("Password", type="password")
+class DatabaseManager:
+    @staticmethod
+    def execute_query(query, params=None):
+        """Execute a database query and return results"""
+        try:
+            with get_db_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(query, params or ())
+                    return cursor.fetchall()
+        except Exception as e:
+            logging.error(f"Database error: {e}")
+            return []
 
-    if username == USERNAME and password == PASSWORD:
-        st.success("Authentication successful! Please refresh the page or continue.")
-        st.session_state["authenticated"] = True
-        return True
-    elif username or password:  # Only display error if inputs are provided
-        st.error("Invalid username or password")
-    return False
 
-def get_database_data(query):
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(query)
-        data = cursor.fetchall()
-        cursor.close()
-        conn.close()
-        return data
-    except Exception as e:
-        logging.error(f"Error fetching data: {e}")
-        return []
+class CommentManager:
+    @staticmethod
+    def add_comment(section_name, related_id, comment_text):
+        """Add a new comment"""
+        try:
+            query = """
+                INSERT INTO comments (finding_type, finding_id, comment)
+                VALUES (%s, %s, %s)
+                RETURNING created_at
+            """
+            with get_db_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(query, (section_name, related_id, comment_text))
+                    created_at = cursor.fetchone()[0]
+                    conn.commit()
+                    return True, created_at
+        except Exception as e:
+            logging.error(f"Error adding comment: {e}")
+            return False, None
 
-def show_screens():
-    st.header("📱 Screens")
-    st.write("These are the screens identified in your iOS/React Native project. Use this as a reference to ensure all screens have Android-friendly layouts and navigations.")
-    query = "SELECT * FROM screens"
-    screens = get_database_data(query)
-    if screens:
-        df = pd.DataFrame(screens, columns=["ID", "Name", "Type", "File Path", "Dependencies", "Created At"])
-        search_term = st.text_input("Search Screens by Name or Path", "")
-        filtered_df = df[
-            df["Name"].str.contains(search_term, case=False, na=False) | 
-            df["File Path"].str.contains(search_term, case=False, na=False)
-        ]
-        st.dataframe(filtered_df)
-        st.write("Tip: Identify if any screen relies heavily on iOS-only components and check UI Patterns or Platform Issues sections.")
-    else:
-        st.write("No screens found.")
+    @staticmethod
+    def fetch_comments(section_name, related_id=None):
+        """Fetch comments for a section"""
+        try:
+            query = """
+                SELECT comment, created_at 
+                FROM comments 
+                WHERE finding_type = %s
+                """ + (" AND finding_id = %s" if related_id else "") + """
+                ORDER BY created_at DESC
+            """
+            params = (section_name,) + ((related_id,) if related_id else ())
+            
+            with get_db_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(query, params)
+                    return cursor.fetchall()
+        except Exception as e:
+            logging.error(f"Error fetching comments: {e}")
+            return []
 
-def show_api_calls():
-    st.header("🌐 API Calls")
-    st.write("These are the API calls detected. Some may require different permissions or handling on Android.")
-    query = "SELECT * FROM api_calls"
-    api_calls = get_database_data(query)
-    if api_calls:
-        df = pd.DataFrame(api_calls, columns=["ID","Endpoint","Method","Request Body","Associated Screen ID","Created At"])
-        st.dataframe(df)
-        st.write("Consider if any of these APIs need Android-specific permission (check the Permissions tab) or different handling (API Behavior tab).")
-    else:
-        st.write("No API calls found.")
-
-def show_dependencies():
-    st.header("🔗 Dependencies")
-    st.write("These are the project dependencies. Identify iOS-specific libraries and find Android equivalents.")
-    query = "SELECT * FROM dependencies"
-    deps = get_database_data(query)
-    if deps:
-        df = pd.DataFrame(deps, columns=["ID","Source","Target","Type","File Path","Created At"])
-        st.dataframe(df)
-        st.write("Check Platform Issues and UI Patterns sections for hints on replacing iOS-specific deps.")
-    else:
-        st.write("No dependencies found.")
-
-def show_navigation_paths():
-    st.header("🛠️ Navigation Paths")
-    st.write("This visualizes your app's navigation flow. Use it to find screens with missing Android equivalents or problematic platform-specific patterns.")
-    query_paths = "SELECT * FROM navigation_paths"
-    paths = get_database_data(query_paths)
-    query_issues = "SELECT file_path FROM platform_issues"
-    platform_issues = get_database_data(query_issues)
-
-    if not paths:
-        st.write("No navigation paths found.")
-        return
-
-    nav_df = pd.DataFrame(paths, columns=["ID","Source Screen","Target Screen","Action","Created At"])
-    issues_df = pd.DataFrame(platform_issues, columns=["File Path"])
-
-    incoming_counts = nav_df["Target Screen"].value_counts()
-    outgoing_counts = nav_df["Source Screen"].value_counts()
-
-    all_screens = set(nav_df["Source Screen"].unique()).union(set(nav_df["Target Screen"].unique()))
-    summary_data = []
-    for screen in all_screens:
-        incoming = incoming_counts.get(screen,0)
-        outgoing = outgoing_counts.get(screen,0)
-        notes = []
-        if incoming == 0:
-            notes.append("Entry Point")
-        if outgoing == 0:
-            notes.append("Dead End")
-        if any(screen in path for path in issues_df["File Path"].unique()):
-            notes.append("Platform Issues ⚠️")
-        summary_data.append({"Screen Name":screen,"Incoming Paths":incoming,"Outgoing Paths":outgoing,"Notes":", ".join(notes)})
-
-    st.write("### Navigation Summary")
-    summary_df = pd.DataFrame(summary_data)
-    st.dataframe(summary_df.sort_values(by=["Incoming Paths","Outgoing Paths"],ascending=[True,False]))
-
-    st.write("### Filters")
-    top_sources = nav_df["Source Screen"].value_counts().head(10).index.tolist()
-    selected_source = st.selectbox("Select a Top-Level Source Screen", ["All"] + top_sources)
-    max_paths = st.slider("Number of Paths to Display", 10, 200, 50, step=10)
-
-    filtered_df = nav_df if selected_source == "All" else nav_df[nav_df["Source Screen"] == selected_source]
-    filtered_df = filtered_df.head(max_paths)
-    st.write(f"Showing {len(filtered_df)} paths")
-    st.dataframe(filtered_df)
-
-    if not filtered_df.empty:
-        st.subheader("Interactive Navigation Flow")
-        visualize_navigation_flow(filtered_df, issues_df)
-        st.write("Red nodes indicate platform-specific issues on that screen. Check 'Platform Issues' and 'UI Patterns' to resolve them.")
-    else:
-        st.write("No navigation paths match the current filters.")
-
-def visualize_navigation_flow(nav_df, issues_df):
-    net = Network(height="750px", width="100%", directed=True)
-    nodes = set(nav_df['Source Screen']).union(set(nav_df['Target Screen']))
-    problematic_files = issues_df['File Path'].unique()
-
-    for node in nodes:
-        color = "red" if any(node in path for path in problematic_files) else "lightblue"
-        title = "⚠️ Platform-specific issues detected" if color == "red" else node
-        net.add_node(node, label=node, title=title, color=color, size=20)
-
-    for _, row in nav_df.iterrows():
-        net.add_edge(row["Source Screen"], row["Target Screen"], title=row["Action"], label=row["Action"], color="gray")
-
-    net.repulsion(node_distance=150, central_gravity=0.5, damping=0.9)
-    net_file = "navigation_graph.html"
-    net.write_html(net_file)
-
-    with open(net_file,"r",encoding="utf-8") as f:
-        html_content = f.read()
-        html(html_content,height=750,width=1000)
-
-def show_platform_issues():
-    st.header("⚠️ Platform-Specific Issues")
-    st.write("These issues highlight where the app uses iOS-only code or patterns. Use suggested Android equivalents or check docs for guidance.")
-    query = "SELECT file_path, line_number, issue_type, details, created_at FROM platform_issues"
-    issues = get_database_data(query)
-    if issues:
-        cols = ["File Path","Line Number","Issue Type","Details","Created At"]
-        df = pd.DataFrame(issues, columns=cols)
-        st.write("### Detailed Platform Issues")
-        st.dataframe(df)
-
-        ios_lib_issues = df[df["Issue Type"]=="ios_library"].copy()
-        if not ios_lib_issues.empty:
-            st.write("### iOS-Only Libraries and Android Equivalents")
-            st.write("Consider replacing these libraries with their Android-friendly counterparts.")
-            st.dataframe(ios_lib_issues[["File Path","Line Number","Details"]])
-        else:
-            st.write("No iOS-specific library issues found.")
-        st.write("Tip: Check Permissions and API Behavior tabs for additional porting considerations.")
-    else:
-        st.write("No platform-specific issues found.")
-
-def show_ui_patterns():
-    st.header("UI Patterns")
-    st.write("Below are iOS-specific UI patterns and their Android equivalents, along with actionable guidance to speed up the porting process.")
-    query = "SELECT screen_name, pattern_type, suggested_android, details, created_at FROM ui_patterns"
-    data = get_database_data(query)
-
-    pattern_guidance = {
-        "TabBar": (
-            "Use BottomNavigationView for Android. Replace TabBarIOS with a cross-platform navigation library.",
-            "https://material.io/components/bottom-navigation"
-        ),
-        "NavigationController": (
-            "Use a Drawer or Stack navigator in React Navigation for Android. Replace NavigationController with React Navigation stacks or drawers.",
-            "https://reactnavigation.org/"
-        ),
-        "Modal": (
-            "Replace <Modal> with DialogFragment or AlertDialog on Android. Consider react-native-modal or Material dialogs.",
-            "https://developer.android.com/guide/fragments/dialogs"
-        )
-    }
-
-    if data:
-        df = pd.DataFrame(data, columns=["Screen Name","Pattern Type","Suggested Android","Details","Created At"])
-        recommended_actions = []
-        docs_links = []
-
-        for _, row in df.iterrows():
-            p_type = row["Pattern Type"]
-            if p_type in pattern_guidance:
-                action, docs = pattern_guidance[p_type]
-                recommended_actions.append(action)
-                docs_links.append(docs)
-            else:
-                recommended_actions.append("No specific guidance available.")
-                docs_links.append("")
-
-        df["Recommended Action"] = recommended_actions
-        df["Docs/Links"] = docs_links
-
-        st.dataframe(df[["Screen Name","Pattern Type","Suggested Android","Details","Recommended Action","Docs/Links","Created At"]])
-        st.write("Focus on replacing these patterns early to align with Android’s UI/UX guidelines.")
-    else:
-        st.write("No UI patterns found.")
-
-def show_hardware_analysis():
-    st.header("🔧 Hardware Analysis")
-    st.write("These are the hardware dependencies detected in your project. Ensure compatibility with Android by addressing the recommendations.")
-
-    query = "SELECT file_path, line_number, hardware_type, recommendation, platform_specific FROM hardware_dependencies"
-    data = get_database_data(query)
-
-    if data:
-        df = pd.DataFrame(data, columns=["File Path", "Line Number", "Hardware Type", "Recommendation", "Platform Specific"])
-        st.dataframe(df)
-    else:
-        st.write("No hardware dependencies found. Your project appears compatible with Android.")
+    @staticmethod
+    def display_comments(section_name, related_id=None):
+        """Display comments section with input"""
+        comments = CommentManager.fetch_comments(section_name, related_id)
         
-def show_device_styling():
-    st.header("Device Styling & Design")
-    st.write("These issues highlight hardcoded px values, non-material components, or styling that doesn't fit Android. Consider using dp units and Material Components.")
-    query = "SELECT file_path,line_number,issue_type,details,created_at FROM device_styling"
-    data = get_database_data(query)
-    if data:
-        df = pd.DataFrame(data, columns=["File Path","Line Number","Issue Type","Details","Created At"])
-        st.dataframe(df)
-        st.write("Check Material Design guidelines and use dp/sp units for responsive UI.")
-    else:
-        st.write("No device styling issues found.")
+        st.subheader("Comments")
+        if comments:
+            for comment, created_at in comments:
+                st.markdown(f"- **{created_at}**: {comment}")
+        else:
+            st.write("No comments yet.")
 
-def show_api_behavior():
-    st.header("API Behavior Differences")
-    st.write("These APIs behave differently or require extra steps on Android. Review the considerations and docs to ensure smooth migration.")
-    query = "SELECT api_name, ios_usage, android_considerations, docs_link, created_at FROM api_behavior"
-    data = get_database_data(query)
-    if data:
-        df = pd.DataFrame(data, columns=["API Name","iOS Usage","Android Considerations","Docs Link","Created At"])
-        st.dataframe(df)
-        st.write("Implement suggested changes to handle permissions, different file systems, or notification frameworks on Android.")
-    else:
-        st.write("No API behavior differences found.")
+        # Create a form for comment submission
+        with st.form(key=f"comment_form_{section_name}_{related_id}"):
+            comment_text = st.text_area("Add a comment:")
+            submit_button = st.form_submit_button("Submit Comment")
+            
+            if submit_button and comment_text.strip():
+                success, created_at = CommentManager.add_comment(section_name, related_id, comment_text.strip())
+                if success:
+                    st.success("Comment added successfully!")
+                    # Use time.sleep to show the success message briefly
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.error("Failed to add comment. Please try again.")
 
-def show_assets():
-    st.header("Assets")
-    st.write("These are your project's assets. Android uses a drawable-xxxhdpi structure instead of @2x/@3x files. Adjust accordingly.")
-    query = "SELECT asset_path, asset_type, ios_variant, android_recommendation, created_at FROM assets"
-    data = get_database_data(query)
-    if data:
-        df = pd.DataFrame(data, columns=["Asset Path","Asset Type","iOS Variant","Android Recommendation","Created At"])
-        st.dataframe(df)
-        st.write("Convert iOS image assets to Android drawables with appropriate densities.")
-    else:
-        st.write("No assets found.")
+    @staticmethod
+    def get_all_comments():
+        """Fetch all comments with their context data"""
+        query = """
+            SELECT 
+                c.id,
+                c.finding_type,
+                c.finding_id,
+                c.comment,
+                c.created_at,
+                CASE 
+                    WHEN c.finding_type = 'Screens' THEN s.name
+                    WHEN c.finding_type = 'API Calls' THEN a.endpoint
+                    -- Add more cases for other types as needed
+                    ELSE NULL
+                END as context_data
+            FROM comments c
+            LEFT JOIN screens s ON c.finding_type = 'Screens' AND c.finding_id = s.id
+            LEFT JOIN api_calls a ON c.finding_type = 'API Calls' AND c.finding_id = a.id
+            ORDER BY c.created_at DESC
+        """
+        try:
+            with get_db_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(query)
+                    return cursor.fetchall()
+        except Exception as e:
+            logging.error(f"Error fetching all comments: {e}")
+            return []
 
-def show_testing_coverage():
-    st.header("Testing Coverage")
-    st.write("Identify components lacking tests or requiring Android-specific tests (like camera, gestures). Implement Android-friendly test frameworks.")
-    query = "SELECT component_name,test_coverage_percentage,ios_specific_functionality,android_testing_suggestions,created_at FROM testing_coverage"
-    data = get_database_data(query)
-    if data:
-        df = pd.DataFrame(data, columns=["Component","Coverage %","iOS Functionality","Android Testing Suggestions","Created At"])
-        st.dataframe(df)
-        st.write("Consider Jest, Detox, or Appium for Android-specific tests.")
-    else:
-        st.write("No testing coverage data found.")
+    @staticmethod
+    def update_comment(comment_id, new_text):
+        """Update an existing comment"""
+        try:
+            query = """
+                UPDATE comments 
+                SET comment = %s,
+                    created_at = NOW()
+                WHERE id = %s
+                RETURNING created_at
+            """
+            with get_db_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(query, (new_text, comment_id))
+                    created_at = cursor.fetchone()[0]
+                    conn.commit()
+                    return True, created_at
+        except Exception as e:
+            logging.error(f"Error updating comment: {e}")
+            return False, None
 
-def show_permissions():
-    st.header("Permissions Mapping")
-    st.write("Map iOS Info.plist permissions to AndroidManifest.xml. Add necessary permissions and request flows for Android.")
-    query = "SELECT ios_permission,android_permission,notes,created_at FROM permissions_mapping"
-    data = get_database_data(query)
-    if data:
-        df = pd.DataFrame(data, columns=["iOS Permission","Android Permission","Notes","Created At"])
-        st.dataframe(df)
-        st.write("Update AndroidManifest.xml and consider runtime permission requests for these features.")
-    else:
-        st.write("No permissions mapping found.")
+    @staticmethod
+    def delete_comment(comment_id):
+        """Delete a comment"""
+        try:
+            query = "DELETE FROM comments WHERE id = %s"
+            with get_db_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(query, (comment_id,))
+                    conn.commit()
+                    return True
+        except Exception as e:
+            logging.error(f"Error deleting comment: {e}")
+            return False
+            
+class DataDisplay:
+    @staticmethod
+    def show_dataframe(query, columns, title, section_name=None, additional_info=None):
+        """Generic method to display data in a dataframe with optional comments"""
+        if title:
+            st.header(title)
+        if additional_info:
+            st.write(additional_info)
+            
+        data = DatabaseManager.execute_query(query)
+        if data:
+            df = pd.DataFrame(data, columns=columns)
+            st.dataframe(df)
+            
+            if section_name:
+                selected_item = st.selectbox(f"Select a {section_name} to comment on", df.iloc[:, 0])
+                CommentManager.display_comments(section_name, selected_item)
+            return df
+        else:
+            st.write(f"No {section_name or 'data'} found.")
+            if section_name:
+                CommentManager.display_comments(section_name)
+            return None
 
-def show_build_recommendations():
-    st.header("Build & Gradle Recommendations")
-    st.write("Set up Gradle, Android Studio, and Android emulators. Follow these recommendations for a smooth Android build process.")
-    query = "SELECT aspect,recommendation,docs_link,created_at FROM build_recommendations"
-    data = get_database_data(query)
-    if data:
-        df = pd.DataFrame(data, columns=["Aspect","Recommendation","Docs Link","Created At"])
-        st.dataframe(df)
-        st.write("Implement these suggestions early to streamline the Android build and testing pipeline.")
-    else:
-        st.write("No build recommendations found.")
+class NavigationFlow:
+    @staticmethod
+    def analyze_paths(nav_df, issues_df):
+        """Analyze navigation paths and create summary"""
+        incoming_counts = nav_df["Target Screen"].value_counts()
+        outgoing_counts = nav_df["Source Screen"].value_counts()
+        all_screens = set(nav_df["Source Screen"].unique()).union(set(nav_df["Target Screen"].unique()))
+        
+        summary_data = []
+        for screen in all_screens:
+            incoming = incoming_counts.get(screen, 0)
+            outgoing = outgoing_counts.get(screen, 0)
+            notes = []
+            if incoming == 0:
+                notes.append("Entry Point")
+            if outgoing == 0:
+                notes.append("Dead End")
+            if any(screen in path for path in issues_df["File Path"].unique()):
+                notes.append("Platform Issues ⚠️")
+            summary_data.append({
+                "Screen Name": screen,
+                "Incoming Paths": incoming,
+                "Outgoing Paths": outgoing,
+                "Notes": ", ".join(notes)
+            })
+        return pd.DataFrame(summary_data)
 
-def show_gestures():
-    st.header("Gestures Mapping")
-    st.write("iOS-specific gestures may need to be replaced with Android equivalents (long-press menus, ripple effects).")
-    query = "SELECT ios_gesture, android_equivalent, notes, created_at FROM gestures_mapping"
-    data = get_database_data(query)
-    if data:
-        df = pd.DataFrame(data, columns=["iOS Gesture","Android Equivalent","Notes","Created At"])
-        st.dataframe(df)
-        st.write("Adopt Android's native gesture systems and consider Material ripple effects.")
-    else:
-        st.write("No gesture mappings found.")
+    @staticmethod
+    def visualize(nav_df, issues_df):
+        """Create interactive navigation flow visualization"""
+        net = Network(height="750px", width="100%", directed=True)
+        nodes = set(nav_df['Source Screen']).union(set(nav_df['Target Screen']))
+        problematic_files = issues_df['File Path'].unique()
 
-def show_native_modules():
-    st.header("Native Modules")
-    st.write("If you used native iOS modules, implement equivalent Java/Kotlin modules on Android.")
-    query = "SELECT ios_module, android_equivalent, bridging_guidance, created_at FROM native_modules"
-    data = get_database_data(query)
-    if data:
-        df = pd.DataFrame(data, columns=["iOS Module","Android Equivalent","Bridging Guidance","Created At"])
-        st.dataframe(df)
-        st.write("Follow bridging guidance and consider code-sharing strategies to minimize platform-specific modules.")
-    else:
-        st.write("No native module mappings found.")
+        for node in nodes:
+            color = "red" if any(node in path for path in problematic_files) else "lightblue"
+            title = "⚠️ Platform-specific issues detected" if color == "red" else node
+            net.add_node(node, label=node, title=title, color=color, size=20)
 
-def show_progress_dashboard():
-    st.header("Porting Progress Dashboard")
-    st.write("Track your progress as you replace iOS libraries, adjust APIs, and convert UI elements to Android. Aim to see these numbers grow as you implement fixes.")
-    query = "SELECT components_ported, ios_libs_replaced, apis_adjusted, ui_elements_converted, last_updated FROM progress_dashboard ORDER BY last_updated DESC LIMIT 1"
-    data = get_database_data(query)
-    if data and len(data)>0:
-        df = pd.DataFrame([data[0]], columns=["Components Ported","iOS Libs Replaced","APIs Adjusted","UI Elements Converted","Last Updated"])
-        st.dataframe(df)
-        st.write("Use this as a motivator and checklist reference. The more you port, the closer you get to a stable Android release!")
-    else:
-        st.write("No progress data found.")
+        for _, row in nav_df.iterrows():
+            net.add_edge(row["Source Screen"], row["Target Screen"], 
+                        title=row["Action"], label=row["Action"], color="gray")
 
-def show_performance_issues():
-    st.header("Performance Issues")
-    st.write("Identify platform-specific performance bottlenecks and follow provided recommendations or docs for Android optimizations.")
-    query = "SELECT file_path, issue_type, details, created_at FROM performance_issues"
-    data = get_database_data(query)
-    if data:
-        df = pd.DataFrame(data, columns=["File Path","Issue Type","Details","Created At"])
-        st.dataframe(df)
-        st.write("Optimize animations, memory usage, and consider Android-friendly optimization techniques (lazy-loading, caching).")
-    else:
-        st.write("No performance issues found.")
+        net.repulsion(node_distance=150, central_gravity=0.5, damping=0.9)
+        net.write_html("navigation_graph.html")
+        
+        with open("navigation_graph.html", "r", encoding="utf-8") as f:
+            html(f.read(), height=750, width=1000)
 
-def show_porting_checklist():
-    st.header("Porting Checklist (Unified Guidance)")
-    st.write("""
-    This section aggregates key findings and gives you a prioritized checklist:
-    1. Address iOS-only UI patterns (UI Patterns tab) and adopt Material design.
-    2. Resolve platform issues (Platform Issues tab) and replace iOS-only libs.
-    3. Adjust APIs that differ on Android (API Behavior tab) and set permissions (Permissions tab).
-    4. Convert assets for Android densities (Assets tab).
-    5. Update build processes (Build Recommendations tab).
-    6. Improve testing coverage for Android scenarios (Testing Coverage tab).
-    7. Check gestures and native modules to ensure Android support (Gestures, Native Modules tabs).
-    8. Track progress in the Progress Dashboard tab.
-    9. Fix performance issues and follow recommended docs.
-    """)
-    st.write("Use the side menu to deep-dive into each category, then return here to ensure all steps are completed.")
+class Dashboard:
+    def __init__(self):
+        self.display = DataDisplay()
+        self.pattern_guidance = {
+            "TabBar": (
+                "Use BottomNavigationView for Android. Replace TabBarIOS with a cross-platform navigation library.",
+                "https://material.io/components/bottom-navigation"
+            ),
+            "NavigationController": (
+                "Use a Drawer or Stack navigator in React Navigation for Android.",
+                "https://reactnavigation.org/"
+            ),
+            "Modal": (
+                "Replace <Modal> with DialogFragment or AlertDialog on Android.",
+                "https://developer.android.com/guide/fragments/dialogs"
+            )
+        }
 
-def main():
-    """Main function to enforce authentication and display app"""
-    if "authenticated" not in st.session_state:
-        st.session_state["authenticated"] = False
+    def show_comments_overview(self):
+        st.header("💬 Comments Overview")
+        st.write("Manage all comments across different sections of the dashboard.")
 
-    if st.session_state["authenticated"] or authenticate_user():
-        st.title("📊 Enhanced React Native App Analysis Dashboard")
-        st.write("Welcome! This dashboard provides a comprehensive analysis of your React Native app, focusing on porting from iOS to Android.")
+        # Fetch all comments
+        comments = CommentManager.get_all_comments()
+        
+        # Add filters
+        col1, col2 = st.columns(2)
+        with col1:
+            sections = ['All'] + list(set(comment[1] for comment in comments))  # finding_type
+            selected_section = st.selectbox('Filter by Section', sections)
+        
+        with col2:
+            sort_options = {
+                'Newest First': 'DESC',
+                'Oldest First': 'ASC'
+            }
+            sort_order = st.selectbox('Sort by', list(sort_options.keys()))
 
-        menu = [
-            "Porting Checklist",
-            "Screens", "API Calls", "Dependencies", "Hardware Analysis", "Navigation Paths", "Platform Issues",
-            "UI Patterns", "Device Styling", "API Behavior", "Assets", "Testing Coverage",
-            "Permissions", "Build Recommendations", "Gestures", "Native Modules", "Progress Dashboard", "Performance Issues"
+        # Filter and sort comments
+        filtered_comments = [
+            c for c in comments 
+            if selected_section == 'All' or c[1] == selected_section
         ]
-        choice = st.sidebar.selectbox("Select a Section", menu)
+        
+        if sort_options[sort_order] == 'ASC':
+            filtered_comments = filtered_comments[::-1]
 
-        if choice == "Screens":
-            show_screens()
-        elif choice == "API Calls":
-            show_api_calls()
-        elif choice == "Dependencies":
-            show_dependencies()
-        elif choice == "Hardware Analysis":
-            show_hardware_analysis()
-        elif choice == "Navigation Paths":
-            show_navigation_paths()
-        elif choice == "Platform Issues":
-            show_platform_issues()
-        elif choice == "UI Patterns":
-            show_ui_patterns()
-        elif choice == "Device Styling":
-            show_device_styling()
-        elif choice == "API Behavior":
-            show_api_behavior()
-        elif choice == "Assets":
-            show_assets()
-        elif choice == "Testing Coverage":
-            show_testing_coverage()
-        elif choice == "Permissions":
-            show_permissions()
-        elif choice == "Build Recommendations":
-            show_build_recommendations()
-        elif choice == "Gestures":
-            show_gestures()
-        elif choice == "Native Modules":
-            show_native_modules()
-        elif choice == "Progress Dashboard":
-            show_progress_dashboard()
-        elif choice == "Performance Issues":
-            show_performance_issues()
-        elif choice == "Porting Checklist":
-            show_porting_checklist()
-    else:
-        st.stop()
+        # Display comments with edit/delete functionality
+        for comment_id, finding_type, finding_id, comment_text, created_at, context_data in filtered_comments:
+            with st.expander(f"{finding_type} - {created_at}", expanded=True):
+                col1, col2 = st.columns([3, 1])
+                
+                with col1:
+                    st.markdown(f"**Section:** {finding_type}")
+                    if context_data:
+                        st.markdown(f"**Context:** {context_data}")
+                    
+                    # Edit form
+                    with st.form(key=f"edit_form_{comment_id}"):
+                        new_comment = st.text_area("Comment", value=comment_text)
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            if st.form_submit_button("Save Changes"):
+                                success, new_created_at = CommentManager.update_comment(comment_id, new_comment)
+                                if success:
+                                    st.success("Comment updated successfully!")
+                                    time.sleep(1)
+                                    st.rerun()
+                                else:
+                                    st.error("Failed to update comment.")
+                        
+                        with col2:
+                            if st.form_submit_button("Delete Comment", type="secondary"):
+                                if CommentManager.delete_comment(comment_id):
+                                    st.success("Comment deleted successfully!")
+                                    time.sleep(1)
+                                    st.rerun()
+                                else:
+                                    st.error("Failed to delete comment.")
 
+    @staticmethod
+    def authenticate():
+        """Handle user authentication"""
+        if "authenticated" not in st.session_state:
+            st.session_state["authenticated"] = False
+
+        if not st.session_state["authenticated"]:
+            st.title("🔒 Login")
+            st.write("Please enter your credentials to access the dashboard.")
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
+
+            if username == USERNAME and password == PASSWORD:
+                st.session_state["authenticated"] = True
+                st.success("Authentication successful! Please refresh the page.")
+                return True
+            elif username or password:
+                st.error("Invalid credentials")
+            return False
+        return True
+
+    def show_screens(self):
+        self.display.show_dataframe(
+            "SELECT * FROM screens",
+            ["ID", "Name", "Type", "File Path", "Dependencies", "Created At"],
+            "📱 Screens",
+            "Screens"
+        )
+
+    def show_api_calls(self):
+        self.display.show_dataframe(
+            "SELECT * FROM api_calls",
+            ["ID", "Endpoint", "Method", "Request Body", "Associated Screen ID", "Created At"],
+            "🌐 API Calls",
+            "API Calls"
+        )
+
+    def show_dependencies(self):
+        self.display.show_dataframe(
+            "SELECT * FROM dependencies",
+            ["ID", "Source", "Target", "Type", "File Path", "Created At"],
+            "🔗 Dependencies",
+            "Dependencies"
+        )
+
+    def show_navigation_paths(self):
+        st.header("🛠️ Navigation Paths")
+        st.write("This visualizes your app's navigation flow. Use it to find screens with missing Android equivalents.")
+        
+        paths_df = self.display.show_dataframe(
+            "SELECT * FROM navigation_paths",
+            ["ID", "Source Screen", "Target Screen", "Action", "Created At"],
+            None,  # Header already set
+            None   # No comments needed for this section
+        )
+        
+        if paths_df is not None:
+            issues_df = pd.DataFrame(
+                DatabaseManager.execute_query("SELECT file_path FROM platform_issues"),
+                columns=["File Path"]
+            )
+            
+            # Show navigation summary
+            summary_df = NavigationFlow.analyze_paths(paths_df, issues_df)
+            st.write("### Navigation Summary")
+            st.dataframe(summary_df.sort_values(
+                by=["Incoming Paths", "Outgoing Paths"],
+                ascending=[True, False]
+            ))
+
+            # Add filters
+            st.write("### Filters")
+            top_sources = paths_df["Source Screen"].value_counts().head(10).index.tolist()
+            selected_source = st.selectbox("Select a Top-Level Source Screen", ["All"] + top_sources)
+            max_paths = st.slider("Number of Paths to Display", 10, 200, 50, step=10)
+
+            # Apply filters
+            filtered_df = paths_df if selected_source == "All" else paths_df[paths_df["Source Screen"] == selected_source]
+            filtered_df = filtered_df.head(max_paths)
+            
+            st.write(f"Showing {len(filtered_df)} paths")
+            st.dataframe(filtered_df)
+
+            if not filtered_df.empty:
+                st.subheader("Interactive Navigation Flow")
+                NavigationFlow.visualize(filtered_df, issues_df)
+                st.write("Red nodes indicate platform-specific issues on that screen.")
+
+    def show_platform_issues(self):
+        df = self.display.show_dataframe(
+            "SELECT file_path, line_number, issue_type, details, created_at FROM platform_issues",
+            ["File Path", "Line Number", "Issue Type", "Details", "Created At"],
+            "⚠️ Platform-Specific Issues",
+            None,
+            "These issues highlight where the app uses iOS-only code or patterns."
+        )
+        
+        if df is not None:
+            ios_lib_issues = df[df["Issue Type"] == "ios_library"].copy()
+            if not ios_lib_issues.empty:
+                st.write("### iOS-Only Libraries and Android Equivalents")
+                st.write("Consider replacing these libraries with their Android-friendly counterparts.")
+                st.dataframe(ios_lib_issues[["File Path", "Line Number", "Details"]])
+
+    def show_ui_patterns(self):
+        df = self.display.show_dataframe(
+            "SELECT screen_name, pattern_type, suggested_android, details, created_at FROM ui_patterns",
+            ["Screen Name", "Pattern Type", "Suggested Android", "Details", "Created At"],
+            "UI Patterns",
+            None,
+            "iOS-specific UI patterns and their Android equivalents"
+        )
+        
+        if df is not None:
+            recommended_actions = []
+            docs_links = []
+            
+            for _, row in df.iterrows():
+                p_type = row["Pattern Type"]
+                if p_type in self.pattern_guidance:
+                    action, docs = self.pattern_guidance[p_type]
+                    recommended_actions.append(action)
+                    docs_links.append(docs)
+                else:
+                    recommended_actions.append("No specific guidance available.")
+                    docs_links.append("")
+                    
+            df["Recommended Action"] = recommended_actions
+            df["Docs/Links"] = docs_links
+            st.dataframe(df)
+
+    def show_device_styling(self):
+        self.display.show_dataframe(
+            "SELECT file_path, line_number, issue_type, details, created_at FROM device_styling",
+            ["File Path", "Line Number", "Issue Type", "Details", "Created At"],
+            "Device Styling & Design",
+            None,
+            "Issues with hardcoded px values and non-material components"
+        )
+
+    def show_api_behavior(self):
+        self.display.show_dataframe(
+            "SELECT api_name, ios_usage, android_considerations, docs_link, created_at FROM api_behavior",
+            ["API Name", "iOS Usage", "Android Considerations", "Docs Link", "Created At"],
+            "API Behavior Differences",
+            None,
+            "These APIs behave differently or require extra steps on Android"
+        )
+
+    def show_assets(self):
+        self.display.show_dataframe(
+            "SELECT asset_path, asset_type, ios_variant, android_recommendation, created_at FROM assets",
+            ["Asset Path", "Asset Type", "iOS Variant", "Android Recommendation", "Created At"],
+            "Assets",
+            None,
+            "Android uses a drawable-xxxhdpi structure instead of @2x/@3x files"
+        )
+
+    def show_testing_coverage(self):
+        self.display.show_dataframe(
+            "SELECT component_name, test_coverage_percentage, ios_specific_functionality, android_testing_suggestions, created_at FROM testing_coverage",
+            ["Component", "Coverage %", "iOS Functionality", "Android Testing Suggestions", "Created At"],
+            "Testing Coverage",
+            None,
+            "Identify components lacking tests or requiring Android-specific tests"
+        )
+
+    def show_permissions(self):
+        self.display.show_dataframe(
+            "SELECT ios_permission, android_permission, notes, created_at FROM permissions_mapping",
+            ["iOS Permission", "Android Permission", "Notes", "Created At"],
+            "Permissions Mapping",
+            None,
+            "Map iOS Info.plist permissions to AndroidManifest.xml"
+        )
+
+    def show_build_recommendations(self):
+        self.display.show_dataframe(
+            "SELECT aspect, recommendation, docs_link, created_at FROM build_recommendations",
+            ["Aspect", "Recommendation", "Docs Link", "Created At"],
+            "Build & Gradle Recommendations",
+            None,
+            "Set up Gradle, Android Studio, and Android emulators"
+        )
+
+    def show_gestures(self):
+        self.display.show_dataframe(
+            "SELECT ios_gesture, android_equivalent, notes, created_at FROM gestures_mapping",
+            ["iOS Gesture", "Android Equivalent", "Notes", "Created At"],
+            "Gestures Mapping",
+            None,
+            "iOS-specific gestures may need to be replaced with Android equivalents"
+        )
+
+    def show_native_modules(self):
+        self.display.show_dataframe(
+            "SELECT ios_module, android_equivalent, bridging_guidance, created_at FROM native_modules",
+            ["iOS Module", "Android Equivalent", "Bridging Guidance", "Created At"],
+            "Native Modules",
+            None,
+            "Implement equivalent Java/Kotlin modules for native iOS modules"
+        )
+
+    def show_progress_dashboard(self):
+        query = """
+            SELECT components_ported, ios_libs_replaced, apis_adjusted, 
+                   ui_elements_converted, last_updated 
+            FROM progress_dashboard 
+            ORDER BY last_updated DESC LIMIT 1
+        """
+        progress_df = self.display.show_dataframe(
+            query,
+            ["Components Ported", "iOS Libs Replaced", "APIs Adjusted", 
+             "UI Elements Converted", "Last Updated"],
+            "Porting Progress Dashboard",
+            None,
+            "Track your progress as you replace iOS libraries and adjust APIs"
+        )
+        
+        if progress_df is not None:
+            st.write("Use this as a motivator and checklist reference!")
+    
+    def show_performance_issues(self):
+        self.display.show_dataframe(
+            "SELECT file_path, issue_type, details, created_at FROM performance_issues",
+            ["File Path", "Issue Type", "Details", "Created At"],
+            "Performance Issues",
+            None,
+            "Identify platform-specific performance bottlenecks"
+        )
+
+    def show_hardware_analysis(self):
+        self.display.show_dataframe(
+            "SELECT file_path, line_number, hardware_type, recommendation, platform_specific FROM hardware_dependencies",
+            ["File Path", "Line Number", "Hardware Type", "Recommendation", "Platform Specific"],
+            "🔧 Hardware Analysis",
+            None,
+            "These are the hardware dependencies detected in your project. Ensure compatibility with Android."
+        )    
+
+    def show_porting_checklist(self):
+        st.header("Porting Checklist (Unified Guidance)")
+        st.write("""
+        This section aggregates key findings and gives you a prioritized checklist:
+        1. Address iOS-only UI patterns (UI Patterns tab) and adopt Material design.
+        2. Resolve platform issues (Platform Issues tab) and replace iOS-only libs.
+        3. Adjust APIs that differ on Android (API Behavior tab) and set permissions.
+        4. Convert assets for Android densities (Assets tab).
+        5. Update build processes (Build Recommendations tab).
+        6. Improve testing coverage for Android scenarios (Testing Coverage tab).
+        7. Check gestures and native modules to ensure Android support.
+        8. Track progress in the Progress Dashboard tab.
+        9. Fix performance issues and follow recommended docs.
+        """)
+        st.write("Use the side menu to deep-dive into each category.")
+
+    def run(self):
+        """Main dashboard execution"""
+        if not self.authenticate():
+            return
+
+        st.title("📊 Enhanced React Native App Analysis Dashboard")
+        st.write("Welcome! This dashboard analyzes your React Native app for iOS to Android porting.")
+
+        sections = {
+            "Porting Checklist": self.show_porting_checklist,
+            "Comments Overview": self.show_comments_overview,
+            "Screens": self.show_screens,
+            "API Calls": self.show_api_calls,
+            "Dependencies": self.show_dependencies,
+            "Hardware Analysis": self.show_hardware_analysis,
+            "Navigation Paths": self.show_navigation_paths,
+            "Platform Issues": self.show_platform_issues,
+            "UI Patterns": self.show_ui_patterns,
+            "Device Styling": self.show_device_styling,
+            "API Behavior": self.show_api_behavior,
+            "Assets": self.show_assets,
+            "Testing Coverage": self.show_testing_coverage,
+            "Permissions": self.show_permissions,
+            "Build Recommendations": self.show_build_recommendations,
+            "Gestures": self.show_gestures,
+            "Native Modules": self.show_native_modules,
+            "Progress Dashboard": self.show_progress_dashboard,
+            "Performance Issues": self.show_performance_issues
+        }
+
+        choice = st.sidebar.selectbox("Select a Section", list(sections.keys()))
+        sections[choice]()
 
 if __name__ == "__main__":
-    main()
+    dashboard = Dashboard()
+    dashboard.run()
