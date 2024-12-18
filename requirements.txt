@@ -1,0 +1,8 @@
+streamlit
+psycopg2-binary
+python-dotenv
+netwrokx
+matplotlib
+pyvis
+jinja2
+watchdog
