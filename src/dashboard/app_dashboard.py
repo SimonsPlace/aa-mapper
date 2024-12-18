@@ -10,6 +10,26 @@ from src.db.database import get_db_connection
 st.set_page_config(page_title="React Native App Analysis", layout="wide")
 logging.basicConfig(level=logging.INFO)
 
+# Authentication
+USERNAME = os.getenv("DASHBOARD_USERNAME")
+PASSWORD = os.getenv("DASHBOARD_PASSWORD")
+
+# Helper functions
+def authenticate_user():
+    """Authenticate user with a dedicated login screen"""
+    st.title("🔒 Login")
+    st.write("Please enter your credentials to access the dashboard.")
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
+
+    if username == USERNAME and password == PASSWORD:
+        st.success("Authentication successful! Please refresh the page or continue.")
+        st.session_state["authenticated"] = True
+        return True
+    elif username or password:  # Only display error if inputs are provided
+        st.error("Invalid username or password")
+    return False
+
 def get_database_data(query):
     try:
         conn = get_db_connection()
@@ -341,50 +361,59 @@ def show_porting_checklist():
     st.write("Use the side menu to deep-dive into each category, then return here to ensure all steps are completed.")
 
 def main():
-    st.title("📊 Enhanced React Native App Analysis Dashboard")
-    st.write("Welcome! This dashboard provides a comprehensive analysis of your React Native app, focusing on porting from iOS to Android. Explore each section to find actionable insights, recommended libraries, and documentation links.")
+    """Main function to enforce authentication and display app"""
+    if "authenticated" not in st.session_state:
+        st.session_state["authenticated"] = False
 
-    menu = [
-        "Porting Checklist",
-        "Screens", "API Calls", "Dependencies", "Navigation Paths", "Platform Issues",
-        "UI Patterns","Device Styling","API Behavior","Assets","Testing Coverage",
-        "Permissions","Build Recommendations","Gestures","Native Modules","Progress Dashboard","Performance Issues"
-    ]
-    choice = st.sidebar.selectbox("Select a Section", menu)
+    if st.session_state["authenticated"] or authenticate_user():
+        st.title("📊 Enhanced React Native App Analysis Dashboard")
+        st.write("Welcome! This dashboard provides a comprehensive analysis of your React Native app, focusing on porting from iOS to Android.")
 
-    if choice == "Screens":
-        show_screens()
-    elif choice == "API Calls":
-        show_api_calls()
-    elif choice == "Dependencies":
-        show_dependencies()
-    elif choice == "Navigation Paths":
-        show_navigation_paths()
-    elif choice == "Platform Issues":
-        show_platform_issues()
-    elif choice == "UI Patterns":
-        show_ui_patterns()
-    elif choice == "Device Styling":
-        show_device_styling()
-    elif choice == "API Behavior":
-        show_api_behavior()
-    elif choice == "Assets":
-        show_assets()
-    elif choice == "Testing Coverage":
-        show_testing_coverage()
-    elif choice == "Permissions":
-        show_permissions()
-    elif choice == "Build Recommendations":
-        show_build_recommendations()
-    elif choice == "Gestures":
-        show_gestures()
-    elif choice == "Native Modules":
-        show_native_modules()
-    elif choice == "Progress Dashboard":
-        show_progress_dashboard()
-    elif choice == "Performance Issues":
-        show_performance_issues()
-    elif choice == "Porting Checklist":
-        show_porting_checklist()
+        menu = [
+            "Porting Checklist",
+            "Screens", "API Calls", "Dependencies", "Navigation Paths", "Platform Issues",
+            "UI Patterns", "Device Styling", "API Behavior", "Assets", "Testing Coverage",
+            "Permissions", "Build Recommendations", "Gestures", "Native Modules", "Progress Dashboard", "Performance Issues"
+        ]
+        choice = st.sidebar.selectbox("Select a Section", menu)
 
-main()
+        if choice == "Screens":
+            show_screens()
+        elif choice == "API Calls":
+            show_api_calls()
+        elif choice == "Dependencies":
+            show_dependencies()
+        elif choice == "Navigation Paths":
+            show_navigation_paths()
+        elif choice == "Platform Issues":
+            show_platform_issues()
+        elif choice == "UI Patterns":
+            show_ui_patterns()
+        elif choice == "Device Styling":
+            show_device_styling()
+        elif choice == "API Behavior":
+            show_api_behavior()
+        elif choice == "Assets":
+            show_assets()
+        elif choice == "Testing Coverage":
+            show_testing_coverage()
+        elif choice == "Permissions":
+            show_permissions()
+        elif choice == "Build Recommendations":
+            show_build_recommendations()
+        elif choice == "Gestures":
+            show_gestures()
+        elif choice == "Native Modules":
+            show_native_modules()
+        elif choice == "Progress Dashboard":
+            show_progress_dashboard()
+        elif choice == "Performance Issues":
+            show_performance_issues()
+        elif choice == "Porting Checklist":
+            show_porting_checklist()
+    else:
+        st.stop()
+
+
+if __name__ == "__main__":
+    main()
