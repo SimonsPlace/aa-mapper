@@ -1,9 +1,14 @@
+import sys
 import os
 import argparse
 import logging
 from dotenv import load_dotenv
 
+# Ensure the root directory is in the path for module resolution
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from src.db.database import Database
+from src.parser.hardware_analyzer import HardwareAnalyzer
 
 # Existing parsers
 from src.parser.js_parser import parse_screens
@@ -115,6 +120,11 @@ def analyze_app(project_path):
         perf_issues = analyze_performance_issues(project_path)
         logging.debug(f"Performance issues: {len(perf_issues)}")
 
+        logging.info("Analyzing hardware dependencies...")
+        analyzer = HardwareAnalyzer()
+        hardware_issues = analyzer.analyze(project_path)
+        logging.debug(f"Hardware issues found: {len(hardware_issues)}")
+
         # Save results to DB
         logging.info("Inserting screens...")
         db.insert_screens(screens)
@@ -164,6 +174,9 @@ def analyze_app(project_path):
 
         logging.info("Inserting performance issues...")
         db.insert_performance_issues(perf_issues)
+
+        logging.info("Inserting hardware dependencies...")
+        db.insert_hardware_dependencies(hardware_issues)
 
         logging.info("Analysis complete! View the results in the dashboard.")
     except Exception as e:

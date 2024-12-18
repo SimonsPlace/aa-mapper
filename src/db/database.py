@@ -1,4 +1,3 @@
-# src/db/database.py
 import os
 import logging
 import psycopg2
@@ -56,7 +55,7 @@ class Database:
                     (call["endpoint"], call["method"], call.get("request_body"), call.get("associated_screen_id"))
                 )
             except Exception as e:
-                logging.error(f"Error inserting api call: {call}, Error: {e}")
+                logging.error(f"Error inserting API call: {call}, Error: {e}")
         self.connection.commit()
 
     def insert_dependencies(self, dependencies):
@@ -116,7 +115,7 @@ class Database:
                     (item["screen_name"], item["pattern_type"], item["suggested_android"], item["details"])
                 )
             except Exception as e:
-                logging.error(f"Error inserting ui_pattern: {item}, Error: {e}")
+                logging.error(f"Error inserting UI pattern: {item}, Error: {e}")
         self.connection.commit()
 
     def insert_device_styling(self, device_styling_issues):
@@ -145,13 +144,13 @@ class Database:
                     """,
                     (
                         item["api_name"],
-                        item.get("ios_usage",""),
-                        item.get("android_considerations",""),
-                        item.get("docs_link","")
+                        item.get("ios_usage", ""),
+                        item.get("android_considerations", ""),
+                        item.get("docs_link", "")
                     )
                 )
             except Exception as e:
-                logging.error(f"Error inserting api behavior: {item}, Error: {e}")
+                logging.error(f"Error inserting API behavior: {item}, Error: {e}")
         self.connection.commit()
 
     def insert_assets(self, asset_list):
@@ -166,8 +165,8 @@ class Database:
                     (
                         asset["asset_path"],
                         asset["asset_type"],
-                        asset.get("ios_variant",""),
-                        asset.get("android_recommendation","")
+                        asset.get("ios_variant", ""),
+                        asset.get("android_recommendation", "")
                     )
                 )
             except Exception as e:
@@ -185,9 +184,9 @@ class Database:
                     """,
                     (
                         gap["component_name"],
-                        gap.get("test_coverage_percentage",0.0),
-                        gap.get("ios_specific_functionality",""),
-                        gap.get("android_testing_suggestions","")
+                        gap.get("test_coverage_percentage", 0.0),
+                        gap.get("ios_specific_functionality", ""),
+                        gap.get("android_testing_suggestions", "")
                     )
                 )
             except Exception as e:
@@ -205,8 +204,8 @@ class Database:
                     """,
                     (
                         p["ios_permission"],
-                        p.get("android_permission",""),
-                        p.get("notes","")
+                        p.get("android_permission", ""),
+                        p.get("notes", "")
                     )
                 )
             except Exception as e:
@@ -225,7 +224,7 @@ class Database:
                     (
                         rec["aspect"],
                         rec["recommendation"],
-                        rec.get("docs_link","")
+                        rec.get("docs_link", "")
                     )
                 )
             except Exception as e:
@@ -243,9 +242,9 @@ class Database:
                     """,
                     (
                         g["ios_gesture"],
-                        g.get("android_equivalent",""),
-                        g.get("notes",""),
-                        g.get("docs_link","")
+                        g.get("android_equivalent", ""),
+                        g.get("notes", ""),
+                        g.get("docs_link", "")
                     )
                 )
             except Exception as e:
@@ -263,9 +262,9 @@ class Database:
                     """,
                     (
                         nm["ios_module"],
-                        nm.get("android_equivalent",""),
-                        nm.get("bridging_guidance",""),
-                        nm.get("docs_link","")
+                        nm.get("android_equivalent", ""),
+                        nm.get("bridging_guidance", ""),
+                        nm.get("docs_link", "")
                     )
                 )
             except Exception as e:
@@ -281,10 +280,10 @@ class Database:
                 ON CONFLICT DO NOTHING
                 """,
                 (
-                    progress_data.get("components_ported",0),
-                    progress_data.get("ios_libs_replaced",0),
-                    progress_data.get("apis_adjusted",0),
-                    progress_data.get("ui_elements_converted",0)
+                    progress_data.get("components_ported", 0),
+                    progress_data.get("ios_libs_replaced", 0),
+                    progress_data.get("apis_adjusted", 0),
+                    progress_data.get("ui_elements_converted", 0)
                 )
             )
         except Exception as e:
@@ -292,6 +291,9 @@ class Database:
         self.connection.commit()
 
     def insert_performance_issues(self, perf_issues):
+        """
+        Inserts performance issues into the database.
+        """
         for pi in perf_issues:
             try:
                 self.cursor.execute(
@@ -304,15 +306,43 @@ class Database:
                         pi["file_path"],
                         pi["issue_type"],
                         pi["details"],
-                        pi.get("docs_link",""),
-                        pi.get("recommendation","")
+                        pi.get("docs_link", ""),
+                        pi.get("recommendation", "")
                     )
                 )
             except Exception as e:
                 logging.error(f"Error inserting performance issue: {pi}, Error: {e}")
         self.connection.commit()
 
+    def insert_hardware_dependencies(self, hardware_issues):
+        """
+        Inserts hardware dependency findings into the database.
+        """
+        for issue in hardware_issues:
+            try:
+                self.cursor.execute(
+                    """
+                    INSERT INTO hardware_dependencies (file_path, line_number, hardware_type, recommendation, platform_specific, created_at)
+                    VALUES (%s, %s, %s, %s, %s, NOW())
+                    ON CONFLICT (file_path, line_number, hardware_type) DO NOTHING
+                    """,
+                    (
+                        issue["file_path"],
+                        issue["line_number"],
+                        issue["hardware_type"],
+                        issue["recommendation"],
+                        issue["platform_specific"]
+                    )
+                )
+                self.connection.commit()
+            except Exception as e:
+                logging.error(f"Error inserting hardware dependency: {issue}, Error: {e}")
+                self.connection.rollback()
+
     def close(self):
+        """
+        Closes the database connection.
+        """
         try:
             self.cursor.close()
             self.connection.close()
@@ -321,7 +351,11 @@ class Database:
             logging.error(f"Error closing database connection: {e}")
 
     def get_connection(self):
+        """
+        Returns the active database connection.
+        """
         return self.connection
+
 
 def get_db_connection():
     """

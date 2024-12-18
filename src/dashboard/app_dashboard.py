@@ -224,6 +224,19 @@ def show_ui_patterns():
     else:
         st.write("No UI patterns found.")
 
+def show_hardware_analysis():
+    st.header("🔧 Hardware Analysis")
+    st.write("These are the hardware dependencies detected in your project. Ensure compatibility with Android by addressing the recommendations.")
+
+    query = "SELECT file_path, line_number, hardware_type, recommendation, platform_specific FROM hardware_dependencies"
+    data = get_database_data(query)
+
+    if data:
+        df = pd.DataFrame(data, columns=["File Path", "Line Number", "Hardware Type", "Recommendation", "Platform Specific"])
+        st.dataframe(df)
+    else:
+        st.write("No hardware dependencies found. Your project appears compatible with Android.")
+        
 def show_device_styling():
     st.header("Device Styling & Design")
     st.write("These issues highlight hardcoded px values, non-material components, or styling that doesn't fit Android. Consider using dp units and Material Components.")
@@ -371,7 +384,7 @@ def main():
 
         menu = [
             "Porting Checklist",
-            "Screens", "API Calls", "Dependencies", "Navigation Paths", "Platform Issues",
+            "Screens", "API Calls", "Dependencies", "Hardware Analysis", "Navigation Paths", "Platform Issues",
             "UI Patterns", "Device Styling", "API Behavior", "Assets", "Testing Coverage",
             "Permissions", "Build Recommendations", "Gestures", "Native Modules", "Progress Dashboard", "Performance Issues"
         ]
@@ -383,6 +396,8 @@ def main():
             show_api_calls()
         elif choice == "Dependencies":
             show_dependencies()
+        elif choice == "Hardware Analysis":
+            show_hardware_analysis()
         elif choice == "Navigation Paths":
             show_navigation_paths()
         elif choice == "Platform Issues":

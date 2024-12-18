@@ -147,6 +147,17 @@ CREATE TABLE IF NOT EXISTS performance_issues (
     created_at TIMESTAMP DEFAULT NOW()
 );
 
+CREATE TABLE hardware_dependencies (
+    id SERIAL PRIMARY KEY,
+    file_path TEXT NOT NULL,
+    line_number INT NOT NULL,
+    hardware_type TEXT NOT NULL,
+    recommendation TEXT,
+    platform_specific TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT unique_hardware_dependency UNIQUE (file_path, line_number, hardware_type)
+);
+
 -- Indexes for faster lookups
 CREATE UNIQUE INDEX IF NOT EXISTS idx_screens_unique ON screens (name, file_path);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_api_calls_unique ON api_calls (endpoint, method);
